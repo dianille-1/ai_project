@@ -1,0 +1,1405 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 流式聊天 · Day 1</title>
+  <!-- Markdown 渲染 + XSS 过滤 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.11/purify.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    :root {
+      --bg: #ffffff;
+      --sidebar-bg: #f7f7f8;
+      --sidebar-active: #e3e3e5;
+      --sidebar-hover: #ececef;
+      --border: #e5e5e5;
+      --text: #1a1a1a;
+      --text-muted: #6e6e80;
+      --user-bubble: #007aff;
+      --ai-bubble: #f0f0f3;
+      --accent: #007aff;
+      --danger: #ff3b30;
+      --code-bg: #1e1e1e;
+      --code-inline-bg: rgba(0,0,0,0.07);
+      --code-copy-bg: rgba(255,255,255,0.1);
+      --quote-border: #d0d0d5;
+      --header-bg: rgba(255,255,255,0.85);
+      --modal-bg: rgba(0,0,0,0.5);
+      --scrollbar-thumb: rgba(0,0,0,0.12);
+      --scrollbar-thumb-hover: rgba(0,0,0,0.22);
+    }
+    [data-theme="dark"] {
+      --bg: #1c1c1e;
+      --sidebar-bg: #232325;
+      --sidebar-active: #38383a;
+      --sidebar-hover: #2c2c2e;
+      --border: #38383a;
+      --text: #e8e8ea;
+      --text-muted: #98989d;
+      --user-bubble: #0a84ff;
+      --ai-bubble: #2c2c2e;
+      --accent: #0a84ff;
+      --danger: #ff453a;
+      --code-bg: #0d0d0d;
+      --code-inline-bg: rgba(255,255,255,0.08);
+      --code-copy-bg: rgba(255,255,255,0.08);
+      --quote-border: #48484a;
+      --header-bg: rgba(28,28,30,0.85);
+      --modal-bg: rgba(0,0,0,0.7);
+      --scrollbar-thumb: rgba(255,255,255,0.15);
+      --scrollbar-thumb-hover: rgba(255,255,255,0.28);
+    }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+      transition: background 0.2s, color 0.2s;
+    }
+    .app { display: flex; height: 100vh; }
+
+    /* ---------- 侧栏 ---------- */
+    .sidebar {
+      width: 280px;
+      background: var(--sidebar-bg);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      transition: background 0.2s;
+    }
+    .sidebar-header { padding: 14px 14px 8px; border-bottom: 1px solid var(--border); }
+    .new-chat-btn {
+      width: 100%;
+      padding: 10px 12px;
+      background: var(--text);
+      color: var(--bg);
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: opacity 0.15s, transform 0.05s;
+    }
+    .new-chat-btn:hover { opacity: 0.85; }
+    .new-chat-btn:active { transform: scale(0.98); }
+
+    .sidebar-search { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+    .sidebar-search input {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 13px;
+      background: var(--bg);
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .sidebar-search input:focus { border-color: var(--accent); }
+
+    .conv-list { flex: 1; overflow-y: auto; padding: 8px; }
+    .conv-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      margin-bottom: 2px;
+      transition: background 0.1s;
+    }
+    .conv-item:hover { background: var(--sidebar-hover); }
+    .conv-item.active { background: var(--sidebar-active); }
+    .conv-title {
+      flex: 1;
+      font-size: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
+    .conv-del {
+      opacity: 0;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 14px;
+      line-height: 1;
+      flex-shrink: 0;
+      transition: opacity 0.1s;
+    }
+    .conv-item:hover .conv-del { opacity: 0.7; }
+    .conv-del:hover { background: var(--danger); color: white; opacity: 1; }
+
+    .sidebar-footer {
+      border-top: 1px solid var(--border);
+      padding: 10px;
+      display: flex;
+      gap: 6px;
+    }
+    .footer-btn {
+      flex: 1;
+      padding: 8px;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--text);
+      transition: background 0.1s;
+    }
+    .footer-btn:hover { background: var(--sidebar-hover); }
+
+    /* ---------- 主区 ---------- */
+    .main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
+    .header {
+      padding: 14px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--header-bg);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      position: relative;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text);
+      max-width: 60%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      padding: 4px 10px;
+      border-radius: 6px;
+      cursor: text;
+      transition: background 0.1s;
+    }
+    .header h1:hover { background: var(--sidebar-hover); }
+    .header h1.editing {
+      background: var(--bg);
+      outline: 2px solid var(--accent);
+      cursor: text;
+      white-space: normal;
+      overflow: visible;
+    }
+    .icon-btn {
+      position: absolute;
+      right: 16px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 34px;
+      height: 34px;
+      background: transparent;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 16px;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.1s;
+    }
+    .icon-btn:hover { background: var(--sidebar-hover); }
+
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+      scroll-behavior: smooth;
+    }
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: var(--text-muted);
+      gap: 20px;
+    }
+    .empty-title { font-size: 15px; }
+    .suggestions {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+      max-width: 500px;
+      width: 100%;
+    }
+    .suggestion {
+      padding: 12px 14px;
+      background: var(--ai-bubble);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--text);
+      text-align: left;
+      transition: border-color 0.15s, transform 0.05s;
+    }
+    .suggestion:hover { border-color: var(--accent); }
+    .suggestion:active { transform: scale(0.98); }
+
+    .msg {
+      display: flex;
+      margin-bottom: 18px;
+      animation: fadeIn 0.2s ease;
+      position: relative;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    .msg.user { justify-content: flex-end; }
+
+    .msg-avatar {
+      width: 32px; height: 32px;
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 600;
+      flex-shrink: 0;
+    }
+    .msg.user .msg-avatar { background: var(--user-bubble); color: white; order: 2; margin-left: 12px; }
+    .msg.ai   .msg-avatar { background: linear-gradient(135deg, #5856d6, #af52de); color: white; margin-right: 12px; }
+
+    .msg-body {
+      max-width: 70%;
+      padding: 12px 16px;
+      border-radius: 16px;
+      line-height: 1.6;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    .msg.user .msg-body { background: var(--user-bubble); color: white; white-space: pre-wrap; }
+    .msg.ai   .msg-body { background: var(--ai-bubble); color: var(--text); }
+
+    /* AI Markdown 样式 */
+    .msg.ai .msg-body p { margin: 0 0 8px 0; }
+    .msg.ai .msg-body p:last-child { margin-bottom: 0; }
+    .msg.ai .msg-body h1, .msg.ai .msg-body h2, .msg.ai .msg-body h3 { margin: 12px 0 6px 0; font-weight: 600; }
+    .msg.ai .msg-body h1 { font-size: 1.3em; }
+    .msg.ai .msg-body h2 { font-size: 1.15em; }
+    .msg.ai .msg-body h3 { font-size: 1.05em; }
+    .msg.ai .msg-body ul, .msg.ai .msg-body ol { padding-left: 22px; margin: 6px 0; }
+    .msg.ai .msg-body li { margin: 2px 0; }
+    .msg.ai .msg-body a { color: var(--accent); text-decoration: none; }
+    .msg.ai .msg-body a:hover { text-decoration: underline; }
+    .msg.ai .msg-body :not(pre) > code {
+      background: var(--code-inline-bg);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 0.92em;
+    }
+    .msg.ai .msg-body pre {
+      background: var(--code-bg);
+      color: #f8f8f2;
+      padding: 12px 14px;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin: 8px 0;
+      font-size: 13px;
+      line-height: 1.5;
+      position: relative;
+    }
+    .msg.ai .msg-body pre code {
+      background: transparent;
+      color: inherit;
+      padding: 0;
+      font-size: inherit;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    }
+    .msg.ai .msg-body blockquote {
+      border-left: 3px solid var(--quote-border);
+      margin: 6px 0;
+      padding: 2px 12px;
+      color: var(--text-muted);
+    }
+
+    /* 时间戳 */
+    .msg-time {
+      position: absolute;
+      top: 4px;
+      font-size: 11px;
+      color: var(--text-muted);
+      opacity: 0;
+      transition: opacity 0.15s;
+      pointer-events: none;
+    }
+    .msg.user .msg-time { right: 56px; }
+    .msg.ai   .msg-time { left: 56px; }
+    .msg:hover .msg-time { opacity: 0.7; }
+
+    /* 消息操作按钮(AI 消息右上角) */
+    .msg-actions {
+      position: absolute;
+      top: -10px;
+      right: 12px;
+      display: flex;
+      gap: 4px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 2px;
+      opacity: 0;
+      transition: opacity 0.15s;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    }
+    .msg.ai:hover .msg-actions { opacity: 1; }
+    .msg-action {
+      background: transparent;
+      border: none;
+      padding: 4px 6px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--text-muted);
+      transition: background 0.1s, color 0.1s;
+    }
+    .msg-action:hover { background: var(--sidebar-hover); color: var(--text); }
+    .msg-action.copied { color: var(--accent); }
+
+    /* 代码块复制按钮 */
+    .code-copy-btn {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      padding: 3px 8px;
+      background: var(--code-copy-bg);
+      color: #d0d0d0;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      opacity: 0;
+      transition: opacity 0.15s, background 0.1s;
+    }
+    pre:hover .code-copy-btn { opacity: 1; }
+    .code-copy-btn:hover { background: rgba(255,255,255,0.18); }
+    .code-copy-btn.copied { background: var(--accent); color: white; }
+
+    /* 打字光标 */
+    .cursor {
+      display: inline-block;
+      width: 2px;
+      height: 1em;
+      background: var(--text);
+      margin-left: 2px;
+      vertical-align: text-bottom;
+      animation: blink 1s steps(2) infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* 思考中动画 */
+    .thinking {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+    .thinking span {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      animation: bounce 1.4s infinite ease-in-out both;
+    }
+    .thinking span:nth-child(1) { animation-delay: -0.32s; }
+    .thinking span:nth-child(2) { animation-delay: -0.16s; }
+    @keyframes bounce {
+      0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+      40% { transform: scale(1); opacity: 1; }
+    }
+
+    /* 滚动到底部按钮 */
+    .scroll-bottom {
+      position: absolute;
+      bottom: 110px;
+      right: 32px;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      font-size: 16px;
+      color: var(--text);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      transition: transform 0.15s, opacity 0.15s;
+      z-index: 5;
+    }
+    .scroll-bottom:hover { transform: translateY(-2px); }
+
+    /* 输入区 */
+    .input-area {
+      padding: 16px 24px 20px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+      background: var(--bg);
+      transition: background 0.2s;
+    }
+    #input {
+      flex: 1;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+      resize: none;
+      line-height: 1.5;
+      max-height: 180px;
+      background: var(--bg);
+      color: var(--text);
+      transition: border-color 0.15s, background 0.2s, color 0.2s;
+    }
+    #input:focus { border-color: var(--accent); }
+    #btn {
+      padding: 0 20px;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      height: 44px;
+      transition: opacity 0.15s, transform 0.05s, background 0.15s;
+    }
+    #btn:hover:not(:disabled) { opacity: 0.9; }
+    #btn:active:not(:disabled) { transform: scale(0.97); }
+    #btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    #btn.stop { background: var(--danger); }
+
+    /* 滚动条 */
+    .conv-list::-webkit-scrollbar, .messages::-webkit-scrollbar { width: 8px; }
+    .conv-list::-webkit-scrollbar-thumb, .messages::-webkit-scrollbar-thumb {
+      background: var(--scrollbar-thumb);
+      border-radius: 4px;
+    }
+    .conv-list::-webkit-scrollbar-thumb:hover, .messages::-webkit-scrollbar-thumb:hover {
+      background: var(--scrollbar-thumb-hover);
+    }
+
+    /* 快捷键面板 */
+    .modal[hidden] { display: none; }
+    .modal {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: fadeIn 0.15s ease;
+    }
+    .modal-backdrop {
+      position: absolute;
+      inset: 0;
+      background: var(--modal-bg);
+    }
+    .modal-content {
+      position: relative;
+      background: var(--bg);
+      padding: 24px;
+      border-radius: 12px;
+      max-width: 380px;
+      width: 90%;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+      border: 1px solid var(--border);
+    }
+    .modal-content h3 { margin: 0 0 16px; font-size: 16px; }
+    .shortcuts-grid { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+    .shortcut {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--text);
+    }
+    .shortcut span { margin-left: auto; color: var(--text-muted); }
+    .modal-tip { font-size: 12px; color: var(--text-muted); text-align: center; padding-top: 12px; border-top: 1px solid var(--border); }
+    kbd {
+      display: inline-block;
+      padding: 2px 6px;
+      min-width: 22px;
+      text-align: center;
+      background: var(--ai-bubble);
+      border: 1px solid var(--border);
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 12px;
+      color: var(--text);
+    }
+
+    /* 响应式 */
+    @media (max-width: 720px) {
+      .sidebar { width: 220px; }
+      .msg-body { max-width: 85%; }
+      .suggestions { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <button class="new-chat-btn" id="new-btn">+ 新对话</button>
+      </div>
+      <div class="sidebar-search">
+        <input id="conv-search" placeholder="🔍 搜索会话" />
+      </div>
+      <div class="conv-list" id="conv-list"></div>
+      <div class="sidebar-footer">
+        <button class="footer-btn" id="export-btn">📥 导出</button>
+        <button class="footer-btn" id="import-btn">📤 导入</button>
+        <input type="file" id="import-input" accept=".json" hidden />
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="header">
+        <h1 id="conv-title" title="双击重命名">新对话</h1>
+        <button class="icon-btn" id="theme-btn" title="切换主题">🌙</button>
+      </header>
+      <div class="messages" id="messages"></div>
+      <button class="scroll-bottom" id="scroll-bottom" hidden title="滚到底部">↓</button>
+      <div class="input-area">
+        <textarea id="input" rows="1" placeholder="输入消息,Enter 发送,Shift+Enter 换行  ·  按 ? 看快捷键"></textarea>
+        <button id="btn">发送</button>
+      </div>
+    </main>
+  </div>
+
+  <div class="modal" id="shortcuts-modal" hidden>
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="modal-content">
+      <h3>⌨️ 键盘快捷键</h3>
+      <div class="shortcuts-grid">
+        <div class="shortcut"><kbd>⌘</kbd><kbd>N</kbd><span>新建对话</span></div>
+        <div class="shortcut"><kbd>⌘</kbd><kbd>K</kbd><span>搜索会话</span></div>
+        <div class="shortcut"><kbd>⌘</kbd><kbd>/</kbd><span>切换主题</span></div>
+        <div class="shortcut"><kbd>?</kbd><span>显示此面板</span></div>
+        <div class="shortcut"><kbd>Esc</kbd><span>关闭面板</span></div>
+        <div class="shortcut"><kbd>Enter</kbd><span>发送消息</span></div>
+        <div class="shortcut"><kbd>⇧</kbd><kbd>Enter</kbd><span>换行</span></div>
+      </div>
+      <div class="modal-tip">Mac 用 ⌘,Windows/Linux 用 Ctrl</div>
+    </div>
+  </div>
+
+  <script>
+    // ==================== 工具 ====================
+    // localStorage 里三个 key 的用途
+    const STORE_KEY = "ai_day1_conversations";  // 所有对话的 JSON
+    const CURRENT_KEY = "ai_day1_current_conv"; // 当前激活的会话 id
+    const THEME_KEY = "ai_day1_theme";          // 用户主题偏好 ("light" | "dark")
+
+    // 配置 marked: 启用 GFM(GitHub 风格) + 单换行变 <br>
+    if (window.marked) marked.setOptions({ breaks: true, gfm: true });
+
+    /**
+     * 把 Markdown 文本渲染成安全的 HTML
+     * 1. 用 marked 解析 Markdown
+     * 2. 用 DOMPurify 过滤,防止 AI 输出里的 <script> 等危险标签
+     * 3. 兜底:没有 marked 就当成纯文本 escapeHtml
+     */
+    function renderMd(text) {
+      if (!window.marked) return escapeHtml(text);
+      const html = marked.parse(text);
+      return window.DOMPurify ? DOMPurify.sanitize(html) : html;
+    }
+
+    /** HTML 特殊字符转义,防 XSS(用户消息直接走这个) */
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[c]));
+    }
+
+    /** 生成短 id(时间戳 + 随机数),用于会话唯一标识 */
+    function uuid() {
+      return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    }
+
+    /** 当前时间 HH:MM,用于消息时间戳(只显示到分钟,不显示秒) */
+    function nowStr() {
+      const d = new Date();
+      return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    }
+
+    /**
+     * 复制文本到剪贴板
+     * 用 navigator.clipboard API(异步)
+     * 返回 true = 成功,false = 失败(老浏览器或非 HTTPS 可能没有 clipboard API)
+     */
+    async function copyText(text) {
+      try { await navigator.clipboard.writeText(text); return true; }
+      catch { return false; }
+    }
+
+    // ==================== 状态 ====================
+    /** 所有对话,数组里的每个元素是 {id, title, messages, createdAt} */
+    let conversations = [];
+    /** 当前激活的会话 id */
+    let currentId = null;
+    /** 重命名时被设为 true 表示"按 ESC 取消",在 blur 时读这个标志决定是否回滚 */
+    let renameCancelled = false;
+    /** 流式状态机:"idle" = 空闲,可发新消息;"streaming" = 正在生成中 */
+    let streamState = "idle";
+    /** AbortController 实例,流式进行中持有,abort() 可以中断请求 */
+    let abortController = null;
+    /** 当前正在流式生成的 AI 消息 body 引用,用于更新 DOM(避免每次 querySelector) */
+    let currentAiBody = null;
+
+    // ==================== 持久化 ====================
+    /**
+     * 从 localStorage 恢复会话数据
+     * 三种兜底场景:
+     * 1. 第一次访问(没数据) → 自动创建一个空对话
+     * 2. localStorage 里的 currentId 指向已删除的会话 → fallback 到第一个
+     * 3. JSON 解析失败 → 视为空,从零开始
+     */
+    function load() {
+      try {
+        conversations = JSON.parse(localStorage.getItem(STORE_KEY) || "[]");
+        currentId = localStorage.getItem(CURRENT_KEY);
+      } catch { conversations = []; currentId = null; }
+      if (conversations.length === 0) {
+        const c = newConvObj();
+        conversations.push(c);
+        currentId = c.id;
+      } else if (!currentId || !conversations.find(c => c.id === currentId)) {
+        currentId = conversations[0].id;
+      }
+    }
+
+    /**
+     * 把当前状态写回 localStorage
+     * 监听 QuotaExceededError(5MB 满了),提示用户导出备份
+     */
+    function save() {
+      try {
+        localStorage.setItem(STORE_KEY, JSON.stringify(conversations));
+        localStorage.setItem(CURRENT_KEY, currentId);
+      } catch (err) {
+        console.warn("保存失败:", err);
+        if (err.name === "QuotaExceededError") {
+          alert("本地存储已满,请导出备份后删除旧对话");
+        }
+      }
+    }
+
+    /** 创建一个新会话对象(只是数据,不写入数组也不渲染) */
+    function newConvObj() {
+      return { id: uuid(), title: "新对话", messages: [], createdAt: Date.now() };
+    }
+
+    /** 拿到当前激活的会话对象,没有就返回 undefined */
+    function getCurrent() { return conversations.find(c => c.id === currentId); }
+
+    // ==================== 主题 ====================
+    /**
+     * 应用主题
+     * - 在 <html> 上设 data-theme,所有 CSS 变量会自动切换
+     * - 同步更新按钮图标(🌙 / ☀️)
+     */
+    function applyTheme(theme) {
+      document.documentElement.setAttribute("data-theme", theme);
+      themeBtn.textContent = theme === "dark" ? "☀️" : "🌙";
+      themeBtn.title = theme === "dark" ? "切换到浅色" : "切换到深色";
+    }
+
+    /** 切换明暗主题并持久化用户偏好 */
+    function toggleTheme() {
+      const cur = document.documentElement.getAttribute("data-theme") || "light";
+      const next = cur === "dark" ? "light" : "dark";
+      applyTheme(next);
+      localStorage.setItem(THEME_KEY, next);
+    }
+
+    /**
+     * 初始化主题(页面加载时调用一次)
+     * 优先级:localStorage > 系统偏好(prefers-color-scheme) > 默认 light
+     */
+    function initTheme() {
+      let theme = localStorage.getItem(THEME_KEY);
+      if (!theme) {
+        theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      }
+      applyTheme(theme);
+    }
+
+    // ==================== 快捷键面板 ====================
+    /** 显示快捷键说明 modal */
+    function showShortcuts() { shortcutsModal.hidden = false; }
+    /** 关闭快捷键说明 modal */
+    function closeShortcuts() { shortcutsModal.hidden = true; }
+
+    // ==================== 重命名 ====================
+    /**
+     * 进入重命名模式
+     * - 标题变成可编辑(contentEditable)
+     * - 自动 focus + 全选,方便直接覆盖输入
+     * - 重置 renameCancelled 标志(以防上次 ESC 状态残留)
+     */
+    function startRename() {
+      renameCancelled = false;
+      titleEl.contentEditable = "true";
+      titleEl.classList.add("editing");
+      titleEl.focus();
+      const range = document.createRange();
+      range.selectNodeContents(titleEl);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+
+    /**
+     * 退出重命名模式
+     * @param saveIt true=提交修改,false=回滚到原标题(用户按了 ESC)
+     */
+    function finishRename(saveIt) {
+      const h = titleEl;
+      h.contentEditable = "false";
+      h.classList.remove("editing");
+      const c = getCurrent();
+      if (!c) { h.textContent = ""; return; }
+      if (!saveIt) { h.textContent = c.title; return; }
+      const newTitle = h.textContent.trim();
+      // 空白标题视为取消;相同标题不触发保存
+      if (newTitle && newTitle !== c.title) {
+        c.title = newTitle;
+        save();
+        renderSidebar();
+      } else {
+        h.textContent = c.title;
+      }
+    }
+
+    // ==================== 导入导出 ====================
+    /**
+     * 导出所有对话为 JSON 文件
+     * 文件名带日期,便于按时间归档
+     * 数据格式: { version: 1, exportedAt, conversations: [...] }
+     */
+    function exportAll() {
+      if (conversations.length === 0) { alert("没有可导出的对话"); return; }
+      const data = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        conversations,
+      };
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `ai-day1-conversations-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    /**
+     * 从 JSON 文件导入对话
+     * 支持两种格式:①纯数组 ②带 conversations 字段的对象
+     * 处理逻辑:
+     *   - 校验格式,过滤掉无效条目(没有 messages 字段的)
+     *   - 让用户选"合并"(追加,生成新 id 避免冲突) 或 "替换"(完全覆盖现有)
+     */
+    function importAll(file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = JSON.parse(e.target.result);
+          const incoming = Array.isArray(data) ? data : data.conversations;
+          if (!Array.isArray(incoming)) throw new Error("文件格式不对");
+          const valid = incoming.filter(c => c && Array.isArray(c.messages));
+          if (valid.length === 0) throw new Error("文件中没有有效对话");
+
+          const mode = confirm(
+            `检测到 ${valid.length} 个对话。\n\n` +
+            `点 "确定" = 合并到现有对话\n` +
+            `点 "取消" = 替换所有对话`
+          );
+          if (mode) {
+            // 合并模式:追加到末尾,生成新 id 避免覆盖现有会话
+            for (const c of valid) conversations.push({ ...c, id: uuid() });
+          } else {
+            // 替换模式:用导入的 id(缺失则生成),切换到第一个
+            conversations = valid.map(c => ({ ...c, id: c.id || uuid() }));
+            currentId = conversations[0].id;
+          }
+          save();
+          renderSidebar();
+          renderMessages();
+          alert(`成功导入 ${valid.length} 个对话`);
+        } catch (err) {
+          alert("导入失败: " + err.message);
+        }
+      };
+      reader.onerror = () => alert("读取文件失败");
+      reader.readAsText(file);
+    }
+
+    // ==================== 会话操作 ====================
+    /** 新建一个空会话,放在列表最前面(最新),自动激活 */
+    function newConv() {
+      const c = newConvObj();
+      conversations.unshift(c);
+      currentId = c.id;
+      save();
+      renderSidebar();
+      renderMessages();
+      inputEl.focus();
+    }
+
+    /**
+     * 切换到指定会话
+     * 如果已经是当前会话,什么都不做(避免无谓的重新渲染)
+     */
+    function switchConv(id) {
+      if (id === currentId) return;
+      currentId = id;
+      save();
+      renderSidebar();
+      renderMessages();
+    }
+
+    /**
+     * 删除指定会话(弹 confirm 确认)
+     * 如果删的是当前会话:
+     *   - 还有其他会话 → 切换到相邻的(优先上一个)
+     *   - 没有会话了 → 创建一个空的新会话
+     */
+    function deleteConv(id) {
+      const idx = conversations.findIndex(c => c.id === id);
+      if (idx === -1) return;
+      if (!confirm(`删除「${conversations[idx].title}」?\n此操作不可恢复`)) return;
+      conversations.splice(idx, 1);
+      if (currentId === id) {
+        if (conversations.length === 0) {
+          const c = newConvObj();
+          conversations.push(c);
+          currentId = c.id;
+        } else {
+          currentId = conversations[Math.max(0, idx - 1)].id;
+        }
+      }
+      save();
+      renderSidebar();
+      renderMessages();
+    }
+
+    // ==================== 渲染 ====================
+    /**
+     * 渲染左侧栏(会话列表)
+     * - 根据当前激活 id 加 .active 类
+     * - 如果搜索框有内容,过滤掉不匹配的标题(不影响 currentId)
+     * - 点击标题切换会话,点击 ✕ 删除
+     */
+    function renderSidebar() {
+      const list = document.getElementById("conv-list");
+      const q = searchInput.value.toLowerCase().trim();
+      list.innerHTML = "";
+      for (const c of conversations) {
+        if (q && !c.title.toLowerCase().includes(q)) continue;
+        const item = document.createElement("div");
+        item.className = "conv-item" + (c.id === currentId ? " active" : "");
+        item.innerHTML = `
+          <span class="conv-title">${escapeHtml(c.title)}</span>
+          <button class="conv-del" title="删除">✕</button>
+        `;
+        item.addEventListener("click", (e) => {
+          if (e.target.closest(".conv-del")) deleteConv(c.id);
+          else switchConv(c.id);
+        });
+        list.appendChild(item);
+      }
+    }
+
+    /**
+     * 渲染空状态(没有任何消息时)
+     * 显示 4 张建议卡片,点击直接填入输入框并发送
+     * 注意:点击事件是绑定在 messagesEl 上的事件委托,见末尾事件区
+     */
+    function renderEmptyState() {
+      messagesEl.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-title">开始你的第一次对话吧 👋</div>
+          <div class="suggestions">
+            <button class="suggestion" data-prompt="解释一下什么是 JavaScript 闭包,用简单例子">💡 解释 JavaScript 闭包</button>
+            <button class="suggestion" data-prompt="用 Python 写一个 HTTP GET 请求的示例代码">🐍 Python HTTP 示例</button>
+            <button class="suggestion" data-prompt="给我讲个程序员的冷笑话">😄 讲个程序员笑话</button>
+            <button class="suggestion" data-prompt="推荐三本适合前端入门的技术书">📚 推荐技术书</button>
+          </div>
+        </div>
+      `;
+    }
+
+    /**
+     * 渲染整个消息区
+     * - 更新标题
+     * - 没有消息 → 显示空状态
+     * - 有消息 → 清空 DOM 后逐条重建(简单粗暴,但消息数不大,够用)
+     * - 渲染完滚到底部
+     */
+    function renderMessages() {
+      const c = getCurrent();
+      titleEl.textContent = c.title;
+      if (!c.messages.length) {
+        renderEmptyState();
+        updateScrollBottom();
+        return;
+      }
+      messagesEl.innerHTML = "";
+      for (const m of c.messages) appendMessage(m.role, m.content, false);
+      scrollToBottom(false);
+      updateScrollBottom();
+    }
+
+    /**
+     * 追加一条消息到 DOM
+     * @param role "user" | "ai"
+     * @param text 内容文本,或特殊字符串 "__thinking__" 表示"思考中"动画
+     * @param scroll 默认 true,新增消息后滚到底部
+     * @returns 创建的 div 元素(供后续操作如 regen 引用)
+     */
+    function appendMessage(role, text, scroll = true) {
+      const empty = messagesEl.querySelector(".empty-state");
+      if (empty) empty.remove();
+
+      const div = document.createElement("div");
+      div.className = "msg " + role;
+      const avatar = role === "user" ? "我" : "AI";
+
+      // 决定消息体 HTML:用户消息 escapeHtml,AI 消息走 Markdown 渲染
+      let bodyHtml;
+      if (text === "__thinking__") {
+        bodyHtml = '<div class="thinking"><span></span><span></span><span></span></div>';
+      } else {
+        bodyHtml = role === "user" ? escapeHtml(text) : renderMd(text);
+      }
+
+      div.innerHTML = `
+        <div class="msg-avatar">${avatar}</div>
+        <div class="msg-body">${bodyHtml}</div>
+        <span class="msg-time">${nowStr()}</span>
+      `;
+
+      // AI 消息才有 hover 操作按钮(复制 / 重新生成)
+      if (role === "ai") {
+        const actions = document.createElement("div");
+        actions.className = "msg-actions";
+        actions.innerHTML = `
+          <button class="msg-action" data-action="copy" title="复制">📋</button>
+          <button class="msg-action" data-action="regen" title="重新生成">🔄</button>
+        `;
+        const [copyBtn, regenBtn] = actions.querySelectorAll(".msg-action");
+        copyBtn.addEventListener("click", async (e) => {
+          const body = div.querySelector(".msg-body");
+          const ok = await copyText(body.textContent);
+          if (ok) {
+            // 1.5 秒后恢复图标
+            copyBtn.classList.add("copied");
+            copyBtn.textContent = "✓";
+            setTimeout(() => {
+              copyBtn.classList.remove("copied");
+              copyBtn.textContent = "📋";
+            }, 1500);
+          }
+        });
+        regenBtn.addEventListener("click", () => regenerateFromMessage(div));
+        div.appendChild(actions);
+        injectCodeCopyButtons(div);
+      }
+
+      messagesEl.appendChild(div);
+      if (scroll) scrollToBottom(true);
+      updateScrollBottom();
+      return div;
+    }
+
+    /**
+     * 给容器内所有 <pre> 代码块右上角注入"复制"按钮
+     * 幂等:已注入过的跳过(避免重复绑定)
+     * 正则 /\.replace(/^复制$/, "")/ 是为了去掉按钮自身的"复制"文本影响复制内容
+     */
+    function injectCodeCopyButtons(container) {
+      container.querySelectorAll("pre").forEach((pre) => {
+        if (pre.querySelector(".code-copy-btn")) return;
+        const btn = document.createElement("button");
+        btn.className = "code-copy-btn";
+        btn.textContent = "复制";
+        btn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const code = pre.querySelector("code")?.textContent || pre.textContent;
+          const ok = await copyText(code.replace(/^复制$/, "").trimEnd());
+          if (ok) {
+            btn.classList.add("copied");
+            btn.textContent = "已复制";
+            setTimeout(() => {
+              btn.classList.remove("copied");
+              btn.textContent = "复制";
+            }, 1500);
+          }
+        });
+        pre.appendChild(btn);
+      });
+    }
+
+    // ==================== 发送/流式 ====================
+    /**
+     * 同步发送按钮的状态
+     * - 流式中 → 变红色"停止"按钮(始终可点,用于中断)
+     * - 空闲时 → 蓝色"发送"按钮,根据输入框是否有内容决定 disabled
+     */
+    function updateSendButton() {
+      if (streamState === "streaming") {
+        btnEl.textContent = "停止";
+        btnEl.classList.add("stop");
+        btnEl.disabled = false;
+      } else {
+        btnEl.textContent = "发送";
+        btnEl.classList.remove("stop");
+        btnEl.disabled = !inputEl.value.trim();
+      }
+    }
+
+    /**
+     * 发送入口(用户点发送 / 回车时调用)
+     * 步骤:
+     *   1. 取输入框文本,清空
+     *   2. 渲染用户消息
+     *   3. 推入当前会话的 messages 数组
+     *   4. 若是首条消息,用前 20 字自动命名会话
+     *   5. 调用 streamCompletion() 触发流式生成
+     */
+    async function send() {
+      const text = inputEl.value.trim();
+      if (!text) return;
+      const c = getCurrent();
+      if (!c) return;
+
+      inputEl.value = "";
+      autoSize();
+
+      appendMessage("user", text);
+      c.messages.push({ role: "user", content: text });
+
+      if (c.messages.length === 1) {
+        c.title = text.length > 20 ? text.slice(0, 20) + "…" : text;
+        titleEl.textContent = c.title;
+        renderSidebar();
+      }
+
+      await streamCompletion();
+    }
+
+    /**
+     * 核心流式逻辑
+     * 1. 创建 AbortController(支持中途中断)
+     * 2. 渲染"思考中"占位
+     * 3. fetch /api/chat,带 signal
+     * 4. 逐行解析 SSE 事件,每收到一段文字就:
+     *    - 累积到 aiText
+     *    - 重新渲染 Markdown + 末尾加光标
+     *    - 注入代码块复制按钮
+     *    - 滚到底部
+     * 5. 完成后去掉光标,把 aiText 推入消息数组
+     * 6. 异常分支:
+     *    - AbortError: 保留已生成内容,标记"(已停止)"
+     *    - 其他错误: 显示红色错误信息
+     */
+    async function streamCompletion() {
+      const c = getCurrent();
+      if (!c) return;
+
+      streamState = "streaming";
+      abortController = new AbortController();
+      updateSendButton();
+
+      const aiDiv = appendMessage("ai", "__thinking__");
+      currentAiBody = aiDiv.querySelector(".msg-body");
+      let aiText = "";
+
+      try {
+        const resp = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: c.messages }),
+          signal: abortController.signal,
+        });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const payload = line.slice(6);
+            if (payload === "[DONE]") continue;
+            try {
+              const { text } = JSON.parse(payload);
+              aiText += text;
+              currentAiBody.innerHTML = renderMd(aiText) + '<span class="cursor"></span>';
+              injectCodeCopyButtons(currentAiBody);
+              scrollToBottom(true);
+            } catch {}
+          }
+        }
+
+        // 完成,去掉光标,正式入库
+        currentAiBody.innerHTML = renderMd(aiText);
+        injectCodeCopyButtons(currentAiBody);
+        c.messages.push({ role: "assistant", content: aiText });
+      } catch (err) {
+        if (err.name === "AbortError") {
+          // 用户中断
+          if (aiText) {
+            currentAiBody.innerHTML = renderMd(aiText) + '<span style="color:var(--text-muted);font-size:12px;margin-left:8px">(已停止)</span>';
+            injectCodeCopyButtons(currentAiBody);
+            c.messages.push({ role: "assistant", content: aiText });
+          } else {
+            aiDiv.remove();
+          }
+        } else {
+          currentAiBody.innerHTML = `<span style="color:var(--danger)">出错了: ${escapeHtml(err.message)}</span>`;
+        }
+      } finally {
+        // 无论成败都要清理流式状态
+        streamState = "idle";
+        abortController = null;
+        currentAiBody = null;
+        updateSendButton();
+        save();
+      }
+    }
+
+    /** 中断当前流式响应(由"停止"按钮触发) */
+    function stopStream() {
+      if (abortController) abortController.abort();
+    }
+
+    /**
+     * 对指定 AI 消息重新生成
+     * - 如果正在生成中 → 拒绝(避免重叠请求)
+     * - 找到这条消息在数组里的位置,截断(包括这条 AI 消息和之后的所有)
+     * - 从截断点重新发起 streamCompletion
+     */
+    async function regenerateFromMessage(aiDiv) {
+      if (streamState === "streaming") {
+        alert("正在生成中,请先停止");
+        return;
+      }
+      const c = getCurrent();
+      if (!c) return;
+      const allMsgDivs = [...messagesEl.querySelectorAll(".msg")];
+      const idx = allMsgDivs.indexOf(aiDiv);
+      if (idx < 0) return;
+      // 截断消息数组(到这条 AI 之前)
+      c.messages = c.messages.slice(0, idx);
+      // 同时删掉 DOM 里 idx 及之后的元素
+      for (let i = allMsgDivs.length - 1; i >= idx; i--) allMsgDivs[i].remove();
+      await streamCompletion();
+    }
+
+    // ==================== 滚动 ====================
+    /**
+     * 滚到消息区底部
+     * @param smooth true=平滑滚动(用户体验好),false=瞬间跳转(初始渲染用)
+     */
+    function scrollToBottom(smooth = true) {
+      messagesEl.scrollTo({
+        top: messagesEl.scrollHeight,
+        behavior: smooth ? "smooth" : "instant",
+      });
+    }
+
+    /**
+     * 根据滚动距离决定"↓ 滚到底部"按钮的显示
+     * 距离底部 < 100px 时隐藏(已经在底部了就不需要)
+     */
+    function updateScrollBottom() {
+      if (!messagesEl) return;
+      const dist = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
+      scrollBottomBtn.hidden = dist < 100;
+    }
+
+    // ==================== 文本域自适应 ====================
+    /**
+     * 让 textarea 根据内容自动撑高(最多 180px,超出后内部滚动)
+     * 必须先 reset 为 auto 才能正确读取 scrollHeight
+     */
+    function autoSize() {
+      inputEl.style.height = "auto";
+      inputEl.style.height = Math.min(inputEl.scrollHeight, 180) + "px";
+    }
+
+    // ==================== DOM 引用 ====================
+    // 集中缓存常用 DOM,避免反复 getElementById
+    const inputEl       = document.getElementById("input");             // 输入框
+    const btnEl         = document.getElementById("btn");               // 发送/停止按钮
+    const newBtn        = document.getElementById("new-btn");           // "+ 新对话"按钮
+    const titleEl       = document.getElementById("conv-title");        // 顶栏标题(contentEditable)
+    const themeBtn      = document.getElementById("theme-btn");         // 🌙/☀️ 主题切换
+    const exportBtn     = document.getElementById("export-btn");        // 导出 JSON
+    const importBtn     = document.getElementById("import-btn");        // 触发文件选择
+    const importInput   = document.getElementById("import-input");      // 隐藏的 file input
+    const searchInput   = document.getElementById("conv-search");       // 搜索框
+    const messagesEl    = document.getElementById("messages");          // 消息区容器
+    const scrollBottomBtn = document.getElementById("scroll-bottom");   // "↓ 滚到底部"按钮
+    const shortcutsModal = document.getElementById("shortcuts-modal");  // 快捷键面板
+    const modalBackdrop = document.getElementById("modal-backdrop");    // 面板背景(点击关闭)
+
+    // ==================== 初始化 ====================
+    // 启动顺序很关键:数据 → 主题 → 渲染 → 状态同步
+    load();            // 1. 读 localStorage
+    initTheme();       // 2. 应用主题(影响 CSS 变量)
+    renderSidebar();   // 3. 渲染侧栏
+    renderMessages();  // 4. 渲染主区
+    updateSendButton();// 5. 初始化按钮状态
+
+    // ==================== 事件 ====================
+    // 主按钮:根据流式状态切换"发送"或"停止"
+    btnEl.addEventListener("click", () => {
+      if (streamState === "streaming") stopStream();
+      else send();
+    });
+    newBtn.addEventListener("click", newConv);
+    themeBtn.addEventListener("click", toggleTheme);
+    exportBtn.addEventListener("click", exportAll);
+    // 导入按钮触发隐藏的 file input
+    importBtn.addEventListener("click", () => importInput.click());
+    importInput.addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (file) importAll(file);
+      importInput.value = ""; // 清空,允许下次选同一文件
+    });
+    scrollBottomBtn.addEventListener("click", () => scrollToBottom(true));
+
+    // 搜索框:input 实时过滤侧栏;Esc 清空并聚焦输入
+    searchInput.addEventListener("input", renderSidebar);
+    searchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        searchInput.value = "";
+        renderSidebar();
+        inputEl.focus();
+      }
+    });
+
+    // 输入框:实时调整高度 + 更新按钮状态;Enter 发送,Shift+Enter 换行
+    inputEl.addEventListener("input", () => {
+      autoSize();
+      if (streamState !== "streaming") updateSendButton();
+    });
+    inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        send();
+      }
+    });
+
+    // 消息区滚动 → 更新"↓"按钮显隐
+    messagesEl.addEventListener("scroll", updateScrollBottom);
+
+    // 标题双击进入编辑,回车保存,ESC 取消;粘贴强制纯文本
+    titleEl.addEventListener("dblclick", startRename);
+    titleEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        titleEl.blur();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        renameCancelled = true;
+        titleEl.blur();
+      }
+    });
+    titleEl.addEventListener("blur", () => finishRename(!renameCancelled));
+    titleEl.addEventListener("paste", (e) => {
+      e.preventDefault();
+      const text = e.clipboardData.getData("text/plain");
+      document.execCommand("insertText", false, text);
+    });
+
+    // 空状态建议卡片:事件委托,点哪个发哪个
+    messagesEl.addEventListener("click", (e) => {
+      const btn = e.target.closest(".suggestion");
+      if (btn) {
+        inputEl.value = btn.dataset.prompt;
+        autoSize();
+        updateSendButton();
+        send();
+      }
+    });
+
+    // 点击面板背景关闭
+    modalBackdrop.addEventListener("click", closeShortcuts);
+
+    // 全局快捷键:Mac ⌘ / Win Ctrl 都支持
+    document.addEventListener("keydown", (e) => {
+      const inField = e.target.matches("input, textarea, [contenteditable]");
+      const meta = e.metaKey || e.ctrlKey;
+
+      // ⌘/ 切主题(总是响应,即使在输入框里)
+      if (meta && e.key === "/") {
+        e.preventDefault();
+        toggleTheme();
+        return;
+      }
+      // ⌘N 新建(只响应无 Shift/Alt 的 N,避免和 ⌘⇧N 等冲突)
+      if (meta && e.key.toLowerCase() === "n" && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        newConv();
+        return;
+      }
+      // ⌘K 搜索
+      if (meta && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        searchInput.focus();
+        searchInput.select();
+        return;
+      }
+      // ? 显示快捷键面板(在输入框里不触发,免得输入 ? 时弹窗)
+      if (e.key === "?" && !inField) {
+        e.preventDefault();
+        shortcutsModal.hidden ? showShortcuts() : closeShortcuts();
+        return;
+      }
+      // Esc:优先关闭面板,其次取消标题编辑
+      if (e.key === "Escape") {
+        if (!shortcutsModal.hidden) {
+          closeShortcuts();
+          return;
+        }
+        if (titleEl.contentEditable === "true") {
+          renameCancelled = true;
+          titleEl.blur();
+        }
+      }
+    });
+
+    // 启动后自动聚焦输入框
+    inputEl.focus();
+  </script>
+</body>
+</html>
