@@ -1,0 +1,8 @@
+# 部署时不要上传这些目录
+src/
+node_modules/
+*.tsbuildinfo
+.DS_Store
+.env
+.env.local
+*.log
