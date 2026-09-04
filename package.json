@@ -6,7 +6,12 @@
     "first": "tsx src/first-call.ts",
     "stream": "tsx src/stream.ts",
     "dev": "tsx src/server.ts",
+    "start": "tsx src/server.ts",
+    "build": "echo 'no build step - tsx runs TS directly'",
     "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "keywords": [],
   "author": "",
