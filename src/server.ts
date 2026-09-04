@@ -1,12 +1,13 @@
 // src/server.ts
 // Express 后端：转发请求到 DeepSeek，并把流式结果通过 SSE 推给浏览器
+// Vercel 部署：导出 app，由 vercel.json + @vercel/node 当 Serverless 函数跑
+// 本地开发：tsx src/server.ts，正常 listen
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import OpenAI from "openai";
 
 const app = express();
-const PORT = 3001;
 
 // 中间件
 app.use(cors());
@@ -55,7 +56,13 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`\n✅ 服务已启动: http://localhost:${PORT}`);
-  console.log(`📱 浏览器打开 http://localhost:${PORT} 即可使用\n`);
-});
+// 本地开发才启动监听；Vercel 上以 Serverless 函数形式运行，不 listen
+if (process.env.VERCEL !== "1") {
+  const PORT = Number(process.env.PORT) || 3001;
+  app.listen(PORT, () => {
+    console.log(`\n✅ 服务已启动: http://localhost:${PORT}`);
+    console.log(`📱 浏览器打开 http://localhost:${PORT} 即可使用\n`);
+  });
+}
+
+export default app;
