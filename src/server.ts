@@ -14,6 +14,14 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static("public")); // 托管 public/ 下的静态文件
 
+// 检查 API Key 是否设置（缺失时给出明确指引，不让 OpenAI 抛莫名错）
+if (!process.env.DEEPSEEK_API_KEY) {
+  console.error("\n❌ DEEPSEEK_API_KEY 未设置");
+  console.error("   本地：在项目根目录创建 .env 文件，写入 DEEPSEEK_API_KEY=sk-你的key");
+  console.error("   Vercel：在 Project Settings → Environment Variables 添加该变量\n");
+  process.exit(1);
+}
+
 const client = new OpenAI({
   apiKey: process.env.DEEPSEEK_API_KEY,
   baseURL: "https://api.deepseek.com/v1",
